@@ -122,7 +122,9 @@ class Plugin implements PluginInterface
 
             if (empty($ip)) {
                 $content = '获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！';
-                include __DIR__ . '/theme.php';
+                $pluginUrl = Helper::options()->pluginUrl;
+                $rootUrl = Helper::options()->rootUrl;
+                include __DIR__ . '/theme.tpl';
                 exit;
             }
 
@@ -140,7 +142,9 @@ class Plugin implements PluginInterface
                     // 在时间窗口内
                     if ($searchCount >= $count) {
                         // 超过限制，显示限制提示
-                        include __DIR__ . '/theme.php';
+                        $pluginUrl = Helper::options()->pluginUrl;
+                        $rootUrl = Helper::options()->rootUrl;
+                        include __DIR__ . '/theme.tpl';
                         exit;
                     }
                     // 允许搜索，计数 +1
