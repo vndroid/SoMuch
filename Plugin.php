@@ -59,7 +59,7 @@ class Plugin implements PluginInterface
         $soMode = new Radio('soMode', array('1' => _t('常规模式'), '2' => _t('仅标题模式')), '1', _t('搜索模式'), _t(""));
         $form->addInput($soMode);
 
-        $midFilter = new Text('midFilter', NULL, NULL, _t('文章分类黑明单'), _t('搜索结果会过滤指定的分类，请填写 mid 值，多个用英文逗号分隔'));
+        $midFilter = new Text('midFilter', NULL, NULL, _t('分类黑名单'), _t('搜索结果会过滤指定的分类，请填写 mid 值，多个用英文逗号分隔'));
         $form->addInput($midFilter);
 
         $pageSize = new Text('pageSize', NULL, NULL, _t('结果分页'), _t('搜索结果每页的文章数量，留空则使用系统默认值'));
@@ -152,10 +152,8 @@ class Plugin implements PluginInterface
                 }
             }
 
-            include __DIR__ . '/search.php';
-        } else {
-            include __DIR__ . '/search.php';
         }
+        include __DIR__ . '/search.php';
     }
 
     /**
