@@ -1,8 +1,22 @@
 <?php
-// 根据搜索模式决定搜索字段条件
+
+use Typecho\Db;
+use Typecho\Config;
+use Widget\Archive;
+
+/**
+ * 以下变量由 Plugin::justSoSo() 通过 include 注入：
+ *
+ * @var string $keywords 原始关键词
+ * @var string $searchQuery 处理后的搜索词（带 % 通配符）
+ * @var int $soMode 搜索模式（1=标题及内容, 2=仅标题）
+ * @var Archive $obj Archive Widget 实例
+ * @var Config $options 插件配置对象
+ */
+
 $searchWhere = ($soMode == 2)
-    ? ['table.contents.title LIKE ?', $searchQuery]                                      // 仅标题
-    : ['table.contents.title LIKE ? OR table.contents.text LIKE ?', $searchQuery, $searchQuery]; // 标题+正文
+    ? ['table.contents.title LIKE ?', $searchQuery] // 仅标题
+    : ['table.contents.title LIKE ? OR table.contents.text LIKE ?', $searchQuery, $searchQuery]; // 标题及内容
 
 $po = $obj->select('table.contents.*')
     ->join('table.relationships', 'table.relationships.cid = table.contents.cid', 'left')
@@ -35,7 +49,7 @@ if ($configPageSize > 0) {
     $pageSize = $sysPageSize % 2 === 0 ? $sysPageSize : $sysPageSize + 1;
 }
 
-$po = $po->order('table.contents.created', Typecho_Db::SORT_DESC)
+$po = $po->order('table.contents.created', Db::SORT_DESC)
     ->page($page, $pageSize);
 $obj->query($po);
 

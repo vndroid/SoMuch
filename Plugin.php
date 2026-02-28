@@ -9,7 +9,6 @@ use Typecho\Widget\Helper\Form\Element\Checkbox;
 use Typecho\Widget\Helper\Form\Element\Radio;
 use Typecho\Widget\Helper\Form\Element\Text;
 use Utils\Helper;
-use Widget\Options;
 
 if (!defined('__TYPECHO_ROOT_DIR__')) {
     exit;
@@ -30,7 +29,7 @@ class Plugin implements PluginInterface
      */
     public static function activate(): string
     {
-        \Typecho\Plugin::factory('Widget_Archive')->search = array(__CLASS__, 'soso');
+        \Typecho\Plugin::factory('Widget_Archive')->search = array(__CLASS__, 'justSoSo');
 
         return _t('搜索增强功能已激活，可以对插件进行设置！');
     }
@@ -60,17 +59,17 @@ class Plugin implements PluginInterface
         $soMode = new Radio('soMode', array('1' => _t('常规模式'), '2' => _t('仅标题模式')), '1', _t('搜索模式'), _t(""));
         $form->addInput($soMode);
 
-        $midFilter = new Text('midFilter', NULL, NULL, _t('搜索结果不显示某分类'), _t('请填写 mid（分类），多个用英文逗号隔开'));
+        $midFilter = new Text('midFilter', NULL, NULL, _t('文章分类黑明单'), _t('搜索结果会过滤指定的分类，请填写 mid 值，多个用英文逗号分隔'));
         $form->addInput($midFilter);
 
-        $pageSize = new Text('pageSize', NULL, NULL, _t('每页搜索结果数'), _t('请填写偶数，留空则使用系统默认值'));
+        $pageSize = new Text('pageSize', NULL, NULL, _t('结果分页'), _t('搜索结果每页的文章数量，留空则使用系统默认值'));
         $form->addInput($pageSize->addRule('isInteger', _t('请填纯数字'))->addRule(function ($value) {
             // 留空时跳过校验
             if ($value === '' || $value === null) {
                 return true;
             }
             return intval($value) % 2 === 0;
-        }, _t('每页结果数必须为偶数')));
+        }, _t('为了显示美观，建议使用偶数分页数量')));
 
         $extendLimit = new Checkbox('extendLimit', array('rate' => _t('频率限制，开启后下方设置会生效'),), array(), _t('拓展设置'), _t(''));
         $form->addInput($extendLimit->multiMode());
@@ -103,7 +102,7 @@ class Plugin implements PluginInterface
      * @return void
      * @throws Exception
      */
-    public static function soso($keywords, $obj): void
+    public static function justSoSo($keywords, $obj): void
     {
         // 获取插件配置
         $options = Helper::options()->plugin('SoMuch');
