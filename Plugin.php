@@ -19,7 +19,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package SoMuch
  * @author Vex
- * @version 0.1.0
+ * @version 0.1.1
  * @link https://github.com/vndroid/somuch
  */
 class Plugin implements PluginInterface
@@ -74,6 +74,9 @@ class Plugin implements PluginInterface
         $extendLimit = new Checkbox('extendLimit', array('rate' => _t('频率限制，开启后下方设置会生效'),), array(), _t('拓展设置'), _t(''));
         $form->addInput($extendLimit->multiMode());
 
+        $isAdmin = new Radio('isAdmin', array('0' => _t('关闭'), '1' => _t('开启')), '0', _t('约束管理员'), _t('开启后管理员也会受到搜索频率限制，关闭则不限制管理员'));
+        $form->addInput($isAdmin);
+
         $count = new Text('count', NULL, '1', _t('搜索限制频率（次）'), _t(''));
         $form->addInput($count->addRule('isInteger', '请填纯数字次数'));
 
@@ -113,46 +116,51 @@ class Plugin implements PluginInterface
         $searchQuery = '%' . str_replace(' ', '%', $keywords) . '%';
 
         if (!empty($options->extendLimit) && in_array('rate', $options->extendLimit)) {
-            if (session_status() === PHP_SESSION_NONE) {
-                session_start();
-            }
+            // 判断是否为管理员，若关闭约束管理员选项则跳过管理员的频率限制
+            $isAdmin = intval($options->isAdmin ?? 0);
+            $user = \Widget\User::alloc();
+            if ($isAdmin || !$user->hasLogin() || !$user->pass('administrator', true)) {
+                if (session_status() === PHP_SESSION_NONE) {
+                    session_start();
+                }
 
-            $ip = self::getGuestAddress();
-            $page = intval($obj->request->get('page') ?? 1);
+                $ip = self::getGuestAddress();
+                $page = intval($obj->request->get('page') ?? 1);
 
-            if (empty($ip)) {
-                $content = '获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！';
-                $pluginUrl = Helper::options()->pluginUrl;
-                $rootUrl = Helper::options()->rootUrl;
-                include __DIR__ . '/theme.tpl';
-                exit;
-            }
+                if (empty($ip)) {
+                    $content = '获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！';
+                    $pluginUrl = Helper::options()->pluginUrl;
+                    $rootUrl = Helper::options()->rootUrl;
+                    include __DIR__ . '/theme.tpl';
+                    exit;
+                }
 
-            // 使用 IP 相关的 Session 键，避免多用户场景下的污染
-            $countKey = $ip . '_count';
-            $timeKey = $ip . '_time';
+                // 使用 IP 相关的 Session 键，避免多用户场景下的污染
+                $countKey = $ip . '_count';
+                $timeKey = $ip . '_time';
 
-            // 只在第一页检查频率限制（翻页时不限制）
-            if ($page === 1) {
-                $lastSearchTime = $_SESSION[$timeKey] ?? 0;
-                $searchCount = $_SESSION[$countKey] ?? 0;
-                $timeDiff = time() - $lastSearchTime;
+                // 只在第一页检查频率限制（翻页时不限制）
+                if ($page === 1) {
+                    $lastSearchTime = $_SESSION[$timeKey] ?? 0;
+                    $searchCount = $_SESSION[$countKey] ?? 0;
+                    $timeDiff = time() - $lastSearchTime;
 
-                if ($timeDiff < $time) {
-                    // 在时间窗口内
-                    if ($searchCount >= $count) {
-                        // 超过限制，显示限制提示
-                        $pluginUrl = Helper::options()->pluginUrl;
-                        $rootUrl = Helper::options()->rootUrl;
-                        include __DIR__ . '/theme.tpl';
-                        exit;
+                    if ($timeDiff < $time) {
+                        // 在时间窗口内
+                        if ($searchCount >= $count) {
+                            // 超过限制，显示限制提示
+                            $pluginUrl = Helper::options()->pluginUrl;
+                            $rootUrl = Helper::options()->rootUrl;
+                            include __DIR__ . '/theme.tpl';
+                            exit;
+                        }
+                        // 允许搜索，计数 +1
+                        $_SESSION[$countKey] = $searchCount + 1;
+                    } else {
+                        // 超过时间窗口，重置计数和时间
+                        $_SESSION[$timeKey] = time();
+                        $_SESSION[$countKey] = 1;
                     }
-                    // 允许搜索，计数 +1
-                    $_SESSION[$countKey] = $searchCount + 1;
-                } else {
-                    // 超过时间窗口，重置计数和时间
-                    $_SESSION[$timeKey] = time();
-                    $_SESSION[$countKey] = 1;
                 }
             }
 
