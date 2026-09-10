@@ -2,6 +2,7 @@
 
 use Typecho\Db;
 use Typecho\Config;
+use Utils\Helper;
 use Widget\Archive;
 
 /**
@@ -23,6 +24,7 @@ $po = $obj->select('table.contents.*')
     ->join('table.metas', 'table.relationships.mid = table.metas.mid', 'left')
     ->where("table.contents.password IS NULL OR table.contents.password = ''")
     ->where('table.contents.status = ?', 'publish')
+    ->where('table.contents.created < ?', Helper::options()->time)
     ->where(...$searchWhere)
     ->where('table.contents.type = ?', 'post')
     ->group('table.contents.cid');
