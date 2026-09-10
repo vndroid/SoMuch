@@ -20,20 +20,33 @@ $searchWhere = ($soMode == 2)
     : ['table.contents.title LIKE ? OR table.contents.text LIKE ?', $searchQuery, $searchQuery]; // 标题及内容
 
 $po = $obj->select('table.contents.*')
-    ->join('table.relationships', 'table.relationships.cid = table.contents.cid', 'left')
-    ->join('table.metas', 'table.relationships.mid = table.metas.mid', 'left')
     ->where("table.contents.password IS NULL OR table.contents.password = ''")
     ->where('table.contents.status = ?', 'publish')
     ->where('table.contents.created < ?', Helper::options()->time)
     ->where(...$searchWhere)
-    ->where('table.contents.type = ?', 'post')
-    ->group('table.contents.cid');
+    ->where('table.contents.type = ?', 'post');
 
 $midFilter = $options->midFilter ?? null;
 if ($midFilter) {
-    $midFilter = array_unique(explode(',', $midFilter));
-    foreach ($midFilter as $v) {
-        $po = $po->where('table.relationships.mid != ' . intval($v));
+    $midFilter = array_unique(array_filter(
+        array_map('intval', explode(',', $midFilter)),
+        static function ($mid) {
+            return $mid > 0;
+        }
+    ));
+
+    if ($midFilter) {
+        $blockedMids = implode(',', $midFilter);
+        $po->join(
+            'table.relationships AS blocked_relationships',
+            'blocked_relationships.cid = table.contents.cid'
+            . ' AND blocked_relationships.mid IN (' . $blockedMids . ')',
+            'left'
+        )->join(
+            'table.metas AS blocked_metas',
+            "blocked_metas.mid = blocked_relationships.mid AND blocked_metas.type = 'category'",
+            'left'
+        )->where('blocked_metas.mid IS NULL');
     }
 }
 
