@@ -1,71 +1,91 @@
 <?php
 
-use Typecho\Db;
 use Typecho\Config;
-use Utils\Helper;
+use Typecho\Date;
+use Typecho\Db;
+use TypechoPlugin\SoMuch\Plugin;
 use Widget\Archive;
+
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
 
 /**
  * 以下变量由 Plugin::justSoSo() 通过 include 注入：
  *
- * @var string $keywords 原始关键词
- * @var string $searchQuery 处理后的搜索词（带 % 通配符）
+ * @var string $keywords 核心 filterSearchQuery() 过滤后的关键词（只剩文字、数字、下划线，词间单个空格）
  * @var int $soMode 搜索模式（1=标题及内容, 2=仅标题）
  * @var Archive $obj Archive Widget 实例
- * @var Config $options 插件配置对象
+ * @var Config $pluginOptions 插件配置对象（不是站点配置）
  */
 
-$searchWhere = ($soMode == 2)
-    ? ['table.contents.title LIKE ?', $searchQuery] // 仅标题
-    : ['table.contents.title LIKE ? OR table.contents.text LIKE ?', $searchQuery, $searchQuery]; // 标题及内容
+$db = Db::get();
 
+// 与核心 searchHandle() 一致：PostgreSQL 的 LIKE 区分大小写，改用 ILIKE
+$likeOp = 'pgsql' === $db->getAdapter()->getDriver() ? 'ILIKE' : 'LIKE';
+
+// 转义 LIKE 通配符。核心过滤后 % 已不可能出现，但 _ 会保留（如 my_var），
+// 不转义的话 _ 会匹配任意单字符。选 ! 做转义符：它在各数据库的字符串字面量里都没有特殊含义，
+// 不受 MySQL NO_BACKSLASH_ESCAPES 影响，SQLite 也没有默认转义符，所以必须显式写 ESCAPE。
+// 注意 "ESCAPE?" 中间不能有空格：Typecho 的 filterColumn() 会把后面跟空格的非关键字单词
+// 当成列名加引号（变成 `ESCAPE`），紧跟 ? 则不会。
+$terms = array_values(array_filter(explode(' ', $keywords), 'strlen'));
+$searchQuery = '%' . implode('%', array_map(static function ($term) {
+    return strtr($term, ['!' => '!!', '%' => '!%', '_' => '!_']);
+}, $terms)) . '%';
+
+$searchWhere = ($soMode == 2)
+    ? ["table.contents.title {$likeOp} ? ESCAPE?", $searchQuery, '!'] // 仅标题
+    : [
+        "table.contents.title {$likeOp} ? ESCAPE? OR table.contents.text {$likeOp} ? ESCAPE?",
+        $searchQuery, '!', $searchQuery, '!'
+    ]; // 标题及内容
+
+// 自建查询绕过了核心 execute() 里的「定时发布」过滤，这里补上：
+// 与核心同样用 < 和同一时间源（Options::___time() 已标 @deprecated，内部就是 Date::time()）。
+// 与核心的差异：已登录作者在核心里能搜到自己的私密文章，本插件只放行 publish。
 $po = $obj->select('table.contents.*')
     ->where("table.contents.password IS NULL OR table.contents.password = ''")
     ->where('table.contents.status = ?', 'publish')
-    ->where('table.contents.created < ?', Helper::options()->time)
+    ->where('table.contents.created < ?', Date::time())
     ->where(...$searchWhere)
     ->where('table.contents.type = ?', 'post');
 
-$midFilter = $options->midFilter ?? null;
-if ($midFilter) {
-    $midFilter = array_unique(array_filter(
-        array_map('intval', explode(',', $midFilter)),
-        static function ($mid) {
-            return $mid > 0;
-        }
-    ));
+// 关键词被过滤成空串时（如 /search/%25/），render() 里的 checkPermalink 随后会 301 跳走，
+// 但本查询在那之前就执行了；不加这句会白跑一次 LIKE '%%' 全表匹配
+if (!$terms) {
+    $po->where('1 = 0');
+}
 
-    if ($midFilter) {
-        $blockedMids = implode(',', $midFilter);
-        $po->join(
-            'table.relationships AS blocked_relationships',
-            'blocked_relationships.cid = table.contents.cid'
-            . ' AND blocked_relationships.mid IN (' . $blockedMids . ')',
-            'left'
-        )->join(
-            'table.metas AS blocked_metas',
-            "blocked_metas.mid = blocked_relationships.mid AND blocked_metas.type = 'category'",
-            'left'
-        )->where('blocked_metas.mid IS NULL');
-    }
+// 分类黑名单：anti-join。mid 已在 resolveBlockedCategories() 里核对过都是现存分类，
+// 所以不必再关联 metas 判断 type；命中任意一个被屏蔽分类的文章都会被 IS NULL 排除，
+// 未命中的只产生一行 NULL，不会重复，不需要 GROUP BY / DISTINCT。
+$blockedMids = Plugin::resolveBlockedCategories(
+    $pluginOptions->midFilter ?? null,
+    '0' !== (string) ($pluginOptions->midInherit ?? '1')
+);
+
+if ($blockedMids) {
+    $po->join(
+        'table.relationships AS blocked_relationships',
+        'blocked_relationships.cid = table.contents.cid'
+        . ' AND blocked_relationships.mid IN (' . implode(',', array_map('intval', $blockedMids)) . ')',
+        Db::LEFT_JOIN
+    )->where('blocked_relationships.cid IS NULL');
 }
 
 $se = clone $po;
 $obj->setCountSql($se);
 
-$page = $obj->request->get('page');
-
 // 优先使用插件配置的 pageSize，否则用系统值并向上取整为偶数
-$configPageSize = intval($options->pageSize ?? 0);
-if ($configPageSize > 0) {
-    $pageSize = $configPageSize % 2 === 0 ? $configPageSize : $configPageSize + 1;
-} else {
-    $sysPageSize = intval($obj->parameter->pageSize);
-    $pageSize = $sysPageSize % 2 === 0 ? $sysPageSize : $sysPageSize + 1;
-}
+$configPageSize = intval($pluginOptions->pageSize ?? 0);
+$pageSize = $configPageSize > 0 ? $configPageSize : intval($obj->parameter->pageSize);
+$pageSize = max(2, $pageSize % 2 === 0 ? $pageSize : $pageSize + 1);
 
-$po = $po->order('table.contents.created', Db::SORT_DESC)
-    ->page($page, $pageSize);
+// 分页导航 pageNav()/pageLink()/getTotalPage() 读的都是 parameter->pageSize，必须同步
+$obj->parameter->pageSize = $pageSize;
+$currentPage = max(1, intval($obj->getCurrentPage()));
+
+$po->order('table.contents.created', Db::SORT_DESC)
+    ->page($currentPage, $pageSize);
 $obj->query($po);
-
-return $keywords;
