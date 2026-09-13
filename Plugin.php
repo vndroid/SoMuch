@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace TypechoPlugin\SoMuch;
 
 use Typecho\Plugin\Exception;
@@ -9,6 +11,7 @@ use Typecho\Widget\Helper\Form\Element\Checkbox;
 use Typecho\Widget\Helper\Form\Element\Radio;
 use Typecho\Widget\Helper\Form\Element\Text;
 use Utils\Helper;
+use Widget\Archive;
 use Widget\Metas\Category\Rows as CategoryRows;
 
 if (!defined('__TYPECHO_ROOT_DIR__')) {
@@ -30,7 +33,7 @@ class Plugin implements PluginInterface
      */
     public static function activate(): string
     {
-        \Typecho\Plugin::factory('Widget_Archive')->search = array(__CLASS__, 'justSoSo');
+        \Typecho\Plugin::factory('Widget\Archive')->search = [Plugin::class, 'justSoSo'];
 
         return _t('搜索增强功能已激活，可以对插件进行设置！');
     }
@@ -43,7 +46,7 @@ class Plugin implements PluginInterface
      * @return void
      */
 
-    public static function deactivate()
+    public static function deactivate(): void
     {
     }
 
@@ -57,8 +60,10 @@ class Plugin implements PluginInterface
 
     public static function config(Form $form): void
     {
-        $soMode = new Radio('soMode', array('1' => _t('常规模式'), '2' => _t('仅标题模式')), '1', _t('搜索模式'), _t(""));
-        $form->addInput($soMode);
+        $soMode = new Radio('soMode', ['1' => _t('常规模式'), '2' => _t('仅标题模式')], '1', _t('搜索模式'), '');
+        $form->addInput($soMode
+            ->addRule('required', _t('请选择搜索模式'))
+            ->addRule(SearchOptions::isValidSearchMode(...), _t('搜索模式无效')));
 
         $midFilter = new Text(
             'midFilter',
@@ -69,7 +74,7 @@ class Plugin implements PluginInterface
             . self::describeCategories()
         );
         $form->addInput($midFilter->addRule(
-            [__CLASS__, 'validateMidFilter'],
+            self::validateMidFilter(...),
             _t('分类黑名单只能填写已存在的分类 mid（纯数字，英文逗号分隔），不能填写标签或不存在的 mid')
         ));
 
@@ -80,31 +85,79 @@ class Plugin implements PluginInterface
             _t('黑名单范围'),
             _t('「包含子分类」会连同所填分类下的所有子孙分类一起屏蔽；「仅精确匹配」只屏蔽所填的分类本身')
         );
-        $form->addInput($midInherit);
+        $form->addInput($midInherit
+            ->addRule('required', _t('请选择黑名单范围'))
+            ->addRule(SearchOptions::isValidToggle(...), _t('黑名单范围无效')));
 
-        $pageSize = new Text('pageSize', NULL, NULL, _t('结果分页'), _t('搜索结果每页的文章数量，留空则使用系统默认值'));
-        $form->addInput($pageSize->addRule('isInteger', _t('请填纯数字'))->addRule(function ($value) {
-            // 留空时跳过校验
-            if ($value === '' || $value === null) {
-                return true;
-            }
-            return intval($value) % 2 === 0;
-        }, _t('为了显示美观，建议使用偶数分页数量')));
+        $pageSize = new Text('pageSize', null, null, _t('结果分页'), _t('搜索结果每页的文章数量，留空则使用系统默认值'));
+        $pageSize->input
+            ->setAttribute('type', 'number')
+            ->setAttribute('min', SearchOptions::MIN_PAGE_SIZE)
+            ->setAttribute('max', SearchOptions::MAX_PAGE_SIZE)
+            ->setAttribute('step', 2);
+        $form->addInput($pageSize->addRule(
+            SearchOptions::isValidPageSize(...),
+            _t('分页数量必须是 2 到 100 之间的偶数，或留空使用系统默认值')
+        ));
 
-        $extendLimit = new Checkbox('extendLimit', array('rate' => _t('频率限制，开启后下方设置会生效'),), array(), _t('拓展设置'), _t(''));
+        $extendLimit = new Checkbox('extendLimit', ['rate' => _t('频率限制，开启后下方设置会生效')], [], _t('拓展设置'), '');
         $form->addInput($extendLimit->multiMode());
 
-        $isAdmin = new Radio('isAdmin', array('0' => _t('关闭'), '1' => _t('开启')), '0', _t('约束管理员'), _t('开启后管理员也会受到搜索频率限制，关闭则不限制管理员'));
-        $form->addInput($isAdmin);
+        $isAdmin = new Radio('isAdmin', ['0' => _t('关闭'), '1' => _t('开启')], '0', _t('约束管理员'), _t('开启后管理员也会受到搜索频率限制，关闭则不限制管理员'));
+        $form->addInput($isAdmin
+            ->addRule('required', _t('请选择是否约束管理员'))
+            ->addRule(SearchOptions::isValidToggle(...), _t('约束管理员选项无效')));
 
-        $count = new Text('count', NULL, '1', _t('搜索限制频率（次）'), _t(''));
-        $form->addInput($count->addRule('isInteger', '请填纯数字次数'));
+        $count = new Text(
+            'count',
+            null,
+            '1',
+            _t('搜索限制频率（次）'),
+            _t('启用频率限制后生效，必须是 1 到 1000 之间的整数')
+        );
+        $count->input
+            ->setAttribute('type', 'number')
+            ->setAttribute('min', SearchOptions::MIN_RATE_COUNT)
+            ->setAttribute('max', SearchOptions::MAX_RATE_COUNT)
+            ->setAttribute('step', 1);
+        $form->addInput($count
+            ->addRule('required', _t('请填写搜索次数'))
+            ->addRule(
+                SearchOptions::isValidRateCount(...),
+                _t('搜索次数必须是 1 到 1000 之间的整数')
+            ));
 
-        $time = new Text('time', NULL, '60', _t('搜索限制时间（秒）'), _t(''));
-        $form->addInput($time->addRule('isInteger', '请填正确秒数'));
+        $time = new Text(
+            'time',
+            null,
+            '60',
+            _t('搜索限制时间（秒）'),
+            _t('启用频率限制后生效，必须是 1 到 86400 之间的整数秒数')
+        );
+        $time->input
+            ->setAttribute('type', 'number')
+            ->setAttribute('min', SearchOptions::MIN_RATE_SECONDS)
+            ->setAttribute('max', SearchOptions::MAX_RATE_SECONDS)
+            ->setAttribute('step', 1);
+        $form->addInput($time
+            ->addRule('required', _t('请填写限制时间'))
+            ->addRule(
+                SearchOptions::isValidRateSeconds(...),
+                _t('限制时间必须是 1 到 86400 之间的整数秒数')
+            ));
 
-        $content = new Text('content', NULL, '一分钟只能搜索一次，请稍后再试！', _t('被限制后的显示提示'), _t(''));
-        $form->addInput($content);
+        $content = new Text(
+            'content',
+            null,
+            null,
+            _t('被限制后的显示提示'),
+            _t('留空时会根据限制时间和次数自动生成，最多 200 个字符')
+        );
+        $content->input->setAttribute('maxlength', SearchOptions::MAX_RATE_MESSAGE_LENGTH);
+        $form->addInput($content->addRule(
+            SearchOptions::isValidRateMessage(...),
+            _t('提示内容不能超过 200 个字符')
+        ));
     }
 
     /**
@@ -112,7 +165,7 @@ class Plugin implements PluginInterface
      *
      * @param Form $form
      */
-    public static function personalConfig(Form $form)
+    public static function personalConfig(Form $form): void
     {
     }
 
@@ -125,21 +178,14 @@ class Plugin implements PluginInterface
      * @return void
      * @throws Exception
      */
-    public static function justSoSo($keywords, $obj): void
+    public static function justSoSo(string $keywords, Archive $obj): void
     {
-        // 插件配置（注意与站点配置 Helper::options() 区分）
-        $pluginOptions = Helper::options()->plugin('SoMuch');
-        $count = intval($pluginOptions->count) ?: 1;
-        $time = intval($pluginOptions->time) ?: 60;
-        $content = $pluginOptions->content ?: "{$time}秒内只能搜索{$count}次，请稍后再试！";
-        $soMode = intval($pluginOptions->soMode) === 2 ? 2 : 1;
-        $keywords = (string) $keywords;
+        $searchOptions = SearchOptions::fromConfig(Helper::options()->plugin('SoMuch'));
 
-        if (!empty($pluginOptions->extendLimit) && in_array('rate', $pluginOptions->extendLimit)) {
+        if ($searchOptions->rateLimitEnabled) {
             // 判断是否为管理员，若关闭约束管理员选项则跳过管理员的频率限制
-            $isAdmin = intval($pluginOptions->isAdmin ?? 0);
             $user = \Widget\User::alloc();
-            if ($isAdmin || !$user->hasLogin() || !$user->pass('administrator', true)) {
+            if ($searchOptions->limitAdministrators || !$user->hasLogin() || !$user->pass('administrator', true)) {
                 if (session_status() === PHP_SESSION_NONE) {
                     session_start();
                 }
@@ -149,11 +195,7 @@ class Plugin implements PluginInterface
                 $page = max(1, intval($obj->getCurrentPage()));
 
                 if (empty($ip)) {
-                    $content = '获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！';
-                    $pluginUrl = Helper::options()->pluginUrl;
-                    $rootUrl = Helper::options()->rootUrl;
-                    include __DIR__ . '/theme.tpl';
-                    exit;
+                    self::rejectSearch('获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！');
                 }
 
                 // 使用 IP 相关的 Session 键，避免多用户场景下的污染
@@ -170,14 +212,10 @@ class Plugin implements PluginInterface
                     $searchCount = $_SESSION[$countKey] ?? 0;
                     $timeDiff = time() - $lastSearchTime;
 
-                    if ($timeDiff < $time) {
+                    if ($timeDiff < $searchOptions->rateLimitSeconds) {
                         // 在时间窗口内
-                        if ($searchCount >= $count) {
-                            // 超过限制，显示限制提示
-                            $pluginUrl = Helper::options()->pluginUrl;
-                            $rootUrl = Helper::options()->rootUrl;
-                            include __DIR__ . '/theme.tpl';
-                            exit;
+                        if ($searchCount >= $searchOptions->rateLimitCount) {
+                            self::rejectSearch($searchOptions->rateLimitMessage);
                         }
                         // 允许搜索，计数 +1
                         $_SESSION[$countKey] = $searchCount + 1;
@@ -196,6 +234,17 @@ class Plugin implements PluginInterface
     }
 
     /**
+     * 输出拒绝页面并终止当前请求
+     */
+    private static function rejectSearch(string $content): never
+    {
+        $pluginUrl = (string) Helper::options()->pluginUrl;
+        $rootUrl = (string) Helper::options()->rootUrl;
+        include __DIR__ . '/theme.tpl';
+        exit;
+    }
+
+    /**
      * 配置校验：分类黑名单只能是已存在的分类 mid
      *
      * @param string|null $value
@@ -211,7 +260,7 @@ class Plugin implements PluginInterface
 
         $categories = CategoryRows::alloc();
         foreach ($mids as $mid) {
-            if (null === $categories->getRow($mid)) {
+            if (!self::categoryExists($categories, $mid)) {
                 return false;
             }
         }
@@ -241,20 +290,44 @@ class Plugin implements PluginInterface
         $blocked = [];
 
         foreach ($mids as $mid) {
-            if (null === $categories->getRow($mid)) {
+            if (!self::categoryExists($categories, $mid)) {
                 continue;
             }
 
             $blocked[] = $mid;
 
             if ($withChildren) {
-                foreach ($categories->getAllChildIds($mid) as $childId) {
+                foreach (self::getAllChildCategoryIds($categories, $mid) as $childId) {
                     $blocked[] = intval($childId);
                 }
             }
         }
 
         return array_values(array_unique($blocked));
+    }
+
+    /**
+     * Typecho 1.3 将 getCategory() 重命名为 getRow()。
+     */
+    private static function categoryExists(CategoryRows $categories, int $mid): bool
+    {
+        return method_exists($categories, 'getRow')
+            ? null !== $categories->getRow($mid)
+            : null !== $categories->getCategory($mid);
+    }
+
+    /**
+     * Typecho 1.3 将 getAllChildren() 重命名为 getAllChildIds()。
+     *
+     * @return int[]
+     */
+    private static function getAllChildCategoryIds(CategoryRows $categories, int $mid): array
+    {
+        $ids = method_exists($categories, 'getAllChildIds')
+            ? $categories->getAllChildIds($mid)
+            : $categories->getAllChildren($mid);
+
+        return array_map('intval', $ids);
     }
 
     /**
@@ -312,7 +385,7 @@ class Plugin implements PluginInterface
      *
      * @access private
      */
-    private static function getGuestAddress()
+    private static function getGuestAddress(): string
     {
         $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
 

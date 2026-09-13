@@ -1,9 +1,12 @@
 <?php
 
-use Typecho\Config;
+declare(strict_types=1);
+
 use Typecho\Date;
 use Typecho\Db;
 use TypechoPlugin\SoMuch\Plugin;
+use TypechoPlugin\SoMuch\SearchMode;
+use TypechoPlugin\SoMuch\SearchOptions;
 use Widget\Archive;
 
 if (!defined('__TYPECHO_ROOT_DIR__')) {
@@ -14,9 +17,8 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  * 以下变量由 Plugin::justSoSo() 通过 include 注入：
  *
  * @var string $keywords 核心 filterSearchQuery() 过滤后的关键词（只剩文字、数字、下划线，词间单个空格）
- * @var int $soMode 搜索模式（1=标题及内容, 2=仅标题）
  * @var Archive $obj Archive Widget 实例
- * @var Config $pluginOptions 插件配置对象（不是站点配置）
+ * @var SearchOptions $searchOptions 已归一化且不可变的搜索配置
  */
 
 $db = Db::get();
@@ -29,12 +31,15 @@ $likeOp = 'pgsql' === $db->getAdapter()->getDriver() ? 'ILIKE' : 'LIKE';
 // 不受 MySQL NO_BACKSLASH_ESCAPES 影响，SQLite 也没有默认转义符，所以必须显式写 ESCAPE。
 // 注意 "ESCAPE?" 中间不能有空格：Typecho 的 filterColumn() 会把后面跟空格的非关键字单词
 // 当成列名加引号（变成 `ESCAPE`），紧跟 ? 则不会。
-$terms = array_values(array_filter(explode(' ', $keywords), 'strlen'));
-$searchQuery = '%' . implode('%', array_map(static function ($term) {
+$terms = array_values(array_filter(
+    explode(' ', $keywords),
+    static fn(string $term): bool => $term !== ''
+));
+$searchQuery = '%' . implode('%', array_map(static function (string $term): string {
     return strtr($term, ['!' => '!!', '%' => '!%', '_' => '!_']);
 }, $terms)) . '%';
 
-$searchWhere = ($soMode == 2)
+$searchWhere = $searchOptions->mode === SearchMode::TitleOnly
     ? ["table.contents.title {$likeOp} ? ESCAPE?", $searchQuery, '!'] // 仅标题
     : [
         "table.contents.title {$likeOp} ? ESCAPE? OR table.contents.text {$likeOp} ? ESCAPE?",
@@ -61,8 +66,8 @@ if (!$terms) {
 // 所以不必再关联 metas 判断 type；命中任意一个被屏蔽分类的文章都会被 IS NULL 排除，
 // 未命中的只产生一行 NULL，不会重复，不需要 GROUP BY / DISTINCT。
 $blockedMids = Plugin::resolveBlockedCategories(
-    $pluginOptions->midFilter ?? null,
-    '0' !== (string) ($pluginOptions->midInherit ?? '1')
+    $searchOptions->categoryFilter,
+    $searchOptions->includeChildCategories
 );
 
 if ($blockedMids) {
@@ -78,9 +83,9 @@ $se = clone $po;
 $obj->setCountSql($se);
 
 // 优先使用插件配置的 pageSize，否则用系统值并向上取整为偶数
-$configPageSize = intval($pluginOptions->pageSize ?? 0);
-$pageSize = $configPageSize > 0 ? $configPageSize : intval($obj->parameter->pageSize);
-$pageSize = max(2, $pageSize % 2 === 0 ? $pageSize : $pageSize + 1);
+$pageSize = $searchOptions->pageSize ?? intval($obj->parameter->pageSize);
+$pageSize = max(SearchOptions::MIN_PAGE_SIZE, min(SearchOptions::MAX_PAGE_SIZE, $pageSize));
+$pageSize = $pageSize % 2 === 0 ? $pageSize : min($pageSize + 1, SearchOptions::MAX_PAGE_SIZE);
 
 // 分页导航 pageNav()/pageLink()/getTotalPage() 读的都是 parameter->pageSize，必须同步
 $obj->parameter->pageSize = $pageSize;
