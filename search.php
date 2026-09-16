@@ -82,10 +82,15 @@ if ($blockedMids) {
 $se = clone $po;
 $obj->setCountSql($se);
 
-// 优先使用插件配置的 pageSize，否则用系统值并向上取整为偶数
-$pageSize = $searchOptions->pageSize ?? intval($obj->parameter->pageSize);
-$pageSize = max(SearchOptions::MIN_PAGE_SIZE, min(SearchOptions::MAX_PAGE_SIZE, $pageSize));
-$pageSize = $pageSize % 2 === 0 ? $pageSize : min($pageSize + 1, SearchOptions::MAX_PAGE_SIZE);
+// 优先使用插件配置的 pageSize（SearchOptions 已把它收敛成 2-100 的偶数）；
+// 留空时沿用系统设置，只做「至少 2 条」和「向上取整为偶数」两步归一 ——
+// MAX_PAGE_SIZE 是插件自己那个输入框的上限，不该拿来削站点自己的每页条数
+$pageSize = $searchOptions->pageSize;
+
+if (null === $pageSize) {
+    $pageSize = max(SearchOptions::MIN_PAGE_SIZE, intval($obj->parameter->pageSize));
+    $pageSize = $pageSize % 2 === 0 ? $pageSize : $pageSize + 1;
+}
 
 // 分页导航 pageNav()/pageLink()/getTotalPage() 读的都是 parameter->pageSize，必须同步
 $obj->parameter->pageSize = $pageSize;

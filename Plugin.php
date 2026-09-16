@@ -23,11 +23,16 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  *
  * @package SoMuch
  * @author Vex
- * @version 0.1.2
+ * @version 0.1.3
  * @link https://github.com/vndroid/somuch
  */
 class Plugin implements PluginInterface
 {
+    /**
+     * 频率限制计数在 Session 中的键前缀
+     */
+    private const SESSION_PREFIX = 'somuch_rate_';
+
     /**
      * 激活插件方法,如果激活失败,直接抛出异常
      */
@@ -190,18 +195,16 @@ class Plugin implements PluginInterface
                     session_start();
                 }
 
-                $ip = self::getGuestAddress();
                 // 与核心分页导航使用同一个页码来源；?page=abc / ?page=0 会得到 0，统一收敛到 1
                 $page = max(1, intval($obj->getCurrentPage()));
 
-                if (empty($ip)) {
-                    self::rejectSearch('获取地址失败，请关闭 VPN 等相关工具后再尝试搜索！');
-                }
-
-                // 使用 IP 相关的 Session 键，避免多用户场景下的污染
-                $countKey = $ip . '_count';
-                $timeKey = $ip . '_time';
-                $keywordsKey = $ip . '_keywords';
+                // Session 本身就是一个客户端一份，两个访客不会共用，所以键名用固定前缀即可。
+                // 早期版本把访客 IP 拼进键名，而该 IP 在反向代理后取自 X-Forwarded-For：
+                // 请求方每次换一个伪造的 IP 头就换一组计数键，限流形同虚设，
+                // 同时还能往同一个 Session 里无限追加键、覆盖其他组件以 _count / _time 结尾的值。
+                $countKey = self::SESSION_PREFIX . 'count';
+                $timeKey = self::SESSION_PREFIX . 'time';
+                $keywordsKey = self::SESSION_PREFIX . 'keywords';
 
                 // 只有「对上一次已放行的同一关键词翻页」才免检；
                 // 直接请求 /search/新词/2/ 或 ?page=2 仍然计数，否则换个页码就能绕过限流
@@ -378,50 +381,5 @@ class Plugin implements PluginInterface
         }
 
         return $items ? '<br>' . _t('现有分类：') . implode('，', $items) : '';
-    }
-
-    /**
-     * 获取访客IP地址
-     *
-     * @access private
-     */
-    private static function getGuestAddress(): string
-    {
-        $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '';
-
-        if (!empty($remoteAddr)) {
-            // 如果是本地 IP，说明使用了反向代理，优先从代理头获取真实 IP
-            if (self::isLocalIp($remoteAddr)) {
-                if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-                    $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
-                    $ip = trim($ips[0]);
-                    if (!empty($ip)) {
-                        return $ip;
-                    }
-                }
-                // 如果没有 HTTP_X_FORWARDED_FOR，再尝试 HTTP_CLIENT_IP
-                if (!empty($_SERVER['HTTP_CLIENT_IP'])) {
-                    return $_SERVER['HTTP_CLIENT_IP'];
-                }
-            }
-            // 不是本地 IP，直接返回
-            return $remoteAddr;
-        }
-        return $remoteAddr;
-    }
-
-    /**
-     * 检查 IP 是否为本地/内网 IP
-     *
-     * @param string $ip IP 地址
-     * @return bool 是否为本地 IP
-     */
-    private static function isLocalIp(string $ip): bool
-    {
-        // 使用 PHP 内置的 filter_var 函数检查是否为私有 IP
-        // FILTER_FLAG_NO_PRIV_RANGE: 拒绝私有 IP 范围
-        // FILTER_FLAG_NO_RES_RANGE: 拒绝保留 IP 范围
-        // 如果返回 false，说明是私有 IP（本地 IP）
-        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
     }
 }
