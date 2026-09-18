@@ -49,7 +49,7 @@
 <body>
 <div class="box">
     <div class="notice-image">
-        <img src="<?= htmlspecialchars($pluginUrl) ?>/SoMuch/404.png" alt=""/>
+        <img src="<?= htmlspecialchars($pluginUrl) ?>/SoMuch/404.png" draggable="false" alt="Forbidden"/>
     </div>
     <div class="notice-content">
         <?= htmlspecialchars($content) ?>
