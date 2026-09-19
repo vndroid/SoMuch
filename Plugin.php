@@ -24,6 +24,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
  * @package SoMuch
  * @author Vex
  * @version 0.1.3
+ * @since 1.2.0
  * @link https://github.com/vndroid/somuch
  */
 class Plugin implements PluginInterface
@@ -94,7 +95,13 @@ class Plugin implements PluginInterface
             ->addRule('required', _t('请选择黑名单范围'))
             ->addRule(SearchOptions::isValidToggle(...), _t('黑名单范围无效')));
 
-        $pageSize = new Text('pageSize', null, null, _t('结果分页'), _t('搜索结果每页的文章数量，留空则使用系统默认值'));
+        $pageSize = new Text(
+            'pageSize',
+            null,
+            null,
+            _t('结果分页'),
+            _t('搜索结果每页的文章数量，必须是 2 到 100 之间的偶数；留空则沿用系统设置，系统值为奇数时会自动向上取整为偶数')
+        );
         $pageSize->input
             ->setAttribute('type', 'number')
             ->setAttribute('min', SearchOptions::MIN_PAGE_SIZE)
@@ -218,7 +225,10 @@ class Plugin implements PluginInterface
                     if ($timeDiff < $searchOptions->rateLimitSeconds) {
                         // 在时间窗口内
                         if ($searchCount >= $searchOptions->rateLimitCount) {
-                            self::rejectSearch($searchOptions->rateLimitMessage);
+                            self::rejectSearch(
+                                $searchOptions->rateLimitMessage,
+                                $searchOptions->rateLimitSeconds - $timeDiff
+                            );
                         }
                         // 允许搜索，计数 +1
                         $_SESSION[$countKey] = $searchCount + 1;
@@ -238,9 +248,36 @@ class Plugin implements PluginInterface
 
     /**
      * 输出拒绝页面并终止当前请求
+     *
+     * @param string $content 提示文案
+     * @param int $retryAfter 距离本轮时间窗口结束还有多少秒
      */
-    private static function rejectSearch(string $content): never
+    private static function rejectSearch(string $content, int $retryAfter): never
     {
+        // 这是一次限流，不是一份搜索结果：429 + Retry-After 告诉客户端该等多久再来，
+        // no-store 防止 CDN、反向代理或浏览器把这张提示页当成该关键词的搜索结果缓存下来，
+        // 连累后面的正常访客。
+        //
+        // 状态码这里要绕两个坑：
+        // 1. Common::init() 注册了一个输出缓冲回调，脚本结束冲刷缓冲区时会拿 Response 里的
+        //    状态码重新发一遍状态行，把这里设的 429 改回 200；而改用 Response::setStatus(429)
+        //    又会撞上核心 HTTP_CODE 表里没有 429（1.2 / 1.3 都没有），每次限流都留下一条
+        //    Undefined array key 警告。所以先把缓冲区连同那个回调一起关掉
+        //    （以输出缓冲抓取整页的缓存类插件同样拿不到这张页面，正合适）。
+        // 2. 状态行必须显式写出来：前面已经发过一次 "HTTP/1.1 200 OK" 之后，
+        //    光调 http_response_code() 在部分 SAPI 上不会改写已经定下的状态行。
+        if (!headers_sent()) {
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+
+            header('HTTP/1.1 429 Too Many Requests', true, 429);
+            header('Retry-After: ' . max(1, $retryAfter));
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+
         $pluginUrl = (string) Helper::options()->pluginUrl;
         $rootUrl = (string) Helper::options()->rootUrl;
         include __DIR__ . '/theme.tpl';
