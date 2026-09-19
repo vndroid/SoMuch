@@ -268,7 +268,9 @@ class Plugin implements PluginInterface
         //    光调 http_response_code() 在部分 SAPI 上不会改写已经定下的状态行。
         if (!headers_sent()) {
             while (ob_get_level() > 0) {
-                ob_end_clean();
+                if (!@ob_end_clean()) {
+                    break;
+                }
             }
 
             header('HTTP/1.1 429 Too Many Requests', true, 429);
